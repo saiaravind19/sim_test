@@ -19,7 +19,7 @@ namespace fleet {
 struct Params {
     float period = 0.1f;          // seconds between control steps (sim time)
     // Robot limits used by the planner (keep at or below the sim's limits).
-    float radius = 0.3f;
+    float radius = 0.42f;         // planner safety radius (sim robots are 0.3 m)
     float vmax = 1.5f;            // m/s
     float amax = 1.0f;            // m/s^2, used to slow down near the goal
     float omegamax = 1.0f;        // rad/s
