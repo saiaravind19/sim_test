@@ -1,0 +1,8 @@
+# nanopb generation options for sim2d_msgs.proto
+# frame_id is short ("map"); repeated fields use callbacks so their counts are not fixed in the generated code.
+sim2d_msgs.Header.frame_id max_size:16
+sim2d_msgs.Path.poses type:FT_CALLBACK
+sim2d_msgs.WorldState.robots type:FT_CALLBACK
+sim2d_msgs.ControlModeRequest.world_name max_size:64
+sim2d_msgs.ControlModeResponse.message max_size:128
+sim2d_msgs.ControlModeResponse.world_name max_size:64

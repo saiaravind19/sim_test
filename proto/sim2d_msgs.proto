@@ -1,0 +1,124 @@
+// Messages for the sim2d ZeroMQ interface. Names follow ROS message types
+// (std_msgs/Header, geometry_msgs/Pose2D, nav_msgs/Path) so they are easy to
+// map to ROS later. Transport: ZeroMQ, one topic frame then one protobuf body.
+//
+// Topics:
+//   /world_<w>/state   WorldState   published by sim2d_app after each step
+//   /cmd_path          PathCommand  subscribed by sim2d_app
+//   /cmd_spawn         SpawnCommand subscribed by sim2d_app
+//   /cmd_vel           VelocityCommand subscribed by sim2d_app
+//
+// Service (ZeroMQ REQ/REP, sim2d_app binds tcp://*:5557):
+//   ControlModeRequest -> ControlModeResponse
+//   read or change how a robot takes commands (see ControlMode)
+
+syntax = "proto3";
+
+package sim2d_msgs;
+
+// Like std_msgs/Header.
+message Header {
+  uint64 stamp_ms = 1;  // simulated time in milliseconds
+  string frame_id = 2;  // coordinate frame, e.g. "map"
+  uint64 seq = 3;       // simulation step counter
+}
+
+// Like geometry_msgs/Pose2D. Position in metres, heading in radians.
+message Pose2D {
+  float x = 1;
+  float y = 2;
+  float theta = 3;
+}
+
+// Like nav_msgs/Path: an ordered list of poses to drive through.
+message Path {
+  Header header = 1;
+  repeated Pose2D poses = 2;
+}
+
+// How a robot takes commands. Exactly one mode is active per robot. A robot
+// starts in WAYPOINT mode. Commands for the other mode are ignored until the
+// mode is switched.
+enum ControlMode {
+  CONTROL_MODE_UNSPECIFIED = 0;  // in a request: do not change, only read
+  CONTROL_MODE_WAYPOINT = 1;     // follows PathCommand
+  CONTROL_MODE_VELOCITY = 2;     // follows VelocityCommand
+}
+
+// Status of one robot.
+message RobotState {
+  uint32 robot_id = 1;
+  Pose2D pose = 2;
+  float v = 3;                // current speed, m/s
+  bool stopped = 4;           // halted by a wall or another robot
+  bool hit_robot = 5;         // halted by contact with another robot
+  bool finished = 6;          // reached its last waypoint
+  uint32 next_index = 7;      // index of the current target waypoint
+  uint32 waypoint_count = 8;  // number of waypoints in its path
+  ControlMode control_mode = 9;
+}
+
+// Published once per simulation step for each world.
+message WorldState {
+  Header header = 1;
+  uint32 world_id = 2;
+  repeated RobotState robots = 3;
+}
+
+// Sets the path for one robot. An empty path clears it.
+message PathCommand {
+  Header header = 1;
+  uint32 world_id = 2;
+  uint32 robot_id = 3;
+  Path path = 4;
+}
+
+// Adds robots to a world while the sim runs. New robots get the next free ids
+// and show up in WorldState. Either place one robot at `pose`, or set `count`
+// to have that many placed automatically (pose is then ignored).
+// Sizes and limits left at 0 use the defaults (radius 0.3, vmax 2, amax 1,
+// omegamax 1).
+message SpawnCommand {
+  Header header = 1;
+  uint32 world_id = 2;
+  uint32 count = 3;
+  Pose2D pose = 4;
+  float radius = 5;
+  float vmax = 6;
+  float amax = 7;
+  float omegamax = 8;
+}
+
+// Drives one robot directly (like geometry_msgs/Twist, planar). Only used while
+// the robot is in VELOCITY mode. The command stays in effect until the next
+// one; send zeros to stop. Limits: |linear| <= vmax, |angular| <= omegamax,
+// and linear speed changes by at most amax per second.
+message VelocityCommand {
+  Header header = 1;
+  uint32 world_id = 2;
+  uint32 robot_id = 3;
+  float linear = 4;   // m/s, negative drives backwards
+  float angular = 5;  // rad/s, positive turns left
+}
+
+// Service request: read or change one robot's control mode. The world is found
+// by world_name, or by world_id when world_name is empty. With mode
+// CONTROL_MODE_UNSPECIFIED nothing changes and the current mode is returned.
+message ControlModeRequest {
+  string world_name = 1;
+  uint32 world_id = 2;
+  uint32 robot_id = 3;
+  ControlMode mode = 4;
+}
+
+// Service reply. `mode` is the robot's mode after the request was handled, so
+// it confirms a change. If success is false, `message` says why and `mode` is
+// the unchanged current mode (UNSPECIFIED if the robot was not found).
+message ControlModeResponse {
+  bool success = 1;
+  string message = 2;
+  string world_name = 3;
+  uint32 world_id = 4;
+  uint32 robot_id = 5;
+  ControlMode mode = 6;
+}
