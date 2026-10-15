@@ -84,6 +84,8 @@ private:
         size_t agent = 0;
         Cell goal;
         std::vector<int32_t> dist;   // steps to the goal from every cell
+        std::vector<Cell> path;      // the global route to the goal (cells)
+        size_t pathIdx = 0;          // where the robot is on that route
         double slowSince = -1;       // sim time it started moving slowly
         float orcaVx = 0, orcaVy = 0;  // last ORCA output
         float prefVx = 0, prefVy = 0;  // last preferred velocity
@@ -93,7 +95,11 @@ private:
     };
 
     bool pickGoal(Robot &r, const RobotObs &o);
-    void prefVelocity(const Robot &r, const RobotObs &o, float &px, float &py) const;
+    // Global planner: shortest route to the goal on the grid, made once when
+    // the goal is chosen (and again only if the robot is knocked off it).
+    bool planPath(Robot &r, Cell from) const;
+    // Local planner input: steer along the stored route.
+    void prefVelocity(Robot &r, const RobotObs &o, float &px, float &py) const;
 
     Grid grid_;
     Params p_;

@@ -90,6 +90,30 @@ int WorldPlanner::stepsLeft(uint32_t robot, float x, float y) const
     return robots_[robot].dist[(size_t)c.y * grid_.width() + c.x];
 }
 
+bool WorldPlanner::planPath(Robot &r, Cell from) const
+{
+    r.path.clear();
+    r.pathIdx = 0;
+    const int W = grid_.width();
+    if (!grid_.movable(from.x, from.y) || r.dist[(size_t)from.y * W + from.x] < 0) return false;
+    static const int dx[4] = { 0, 0, 1, -1 };
+    static const int dy[4] = { 1, -1, 0, 0 };
+    Cell c = from;
+    r.path.push_back(c);
+    while (r.dist[(size_t)c.y * W + c.x] > 0) {
+        int32_t d = r.dist[(size_t)c.y * W + c.x];
+        bool found = false;
+        for (int k = 0; k < 4 && !found; k++) {
+            int nx = c.x + dx[k], ny = c.y + dy[k];
+            if (!grid_.movable(nx, ny)) continue;
+            if (r.dist[(size_t)ny * W + nx] == d - 1) { c = { nx, ny }; found = true; }
+        }
+        if (!found) return false;
+        r.path.push_back(c);
+    }
+    return true;
+}
+
 bool WorldPlanner::pickGoal(Robot &r, const RobotObs &o)
 {
     Cell here = grid_.cellAt(o.x, o.y);
@@ -107,12 +131,13 @@ bool WorldPlanner::pickGoal(Robot &r, const RobotObs &o)
             continue;  // arrows do not let this robot get there
         }
         r.goal = g;
+        planPath(r, here);
         return true;
     }
     return false;
 }
 
-void WorldPlanner::prefVelocity(const Robot &r, const RobotObs &o, float &px, float &py) const
+void WorldPlanner::prefVelocity(Robot &r, const RobotObs &o, float &px, float &py) const
 {
     float gx, gy;
     grid_.centre(r.goal, gx, gy);
@@ -120,33 +145,27 @@ void WorldPlanner::prefVelocity(const Robot &r, const RobotObs &o, float &px, fl
 
     Cell cur = grid_.cellAt(o.x, o.y);
     const int W = grid_.width();
-    bool onRoute = grid_.movable(cur.x, cur.y) && r.dist[(size_t)cur.y * W + cur.x] >= 0;
-    if (onRoute && r.dist[(size_t)cur.y * W + cur.x] > 0) {
-        // Walk down the distance field a few cells, then aim at the furthest
-        // of them that is in a straight, clear line from the robot.
-        static const int dx[4] = { 0, 0, 1, -1 };
-        static const int dy[4] = { 1, -1, 0, 0 };
-        // Cells of the planned route, current cell first.
+
+    // Where is the robot on its stored route?
+    bool onPath = false;
+    if (!r.path.empty()) {
+        size_t last = std::min(r.pathIdx + 4, r.path.size() - 1);
+        for (size_t i = r.pathIdx; i <= last && !onPath; i++)
+            if (r.path[i].x == cur.x && r.path[i].y == cur.y) { r.pathIdx = i; onPath = true; }
+    }
+    if (!onPath && grid_.movable(cur.x, cur.y) && !r.dist.empty() &&
+        r.dist[(size_t)cur.y * W + cur.x] >= 0) {
+        onPath = planPath(r, cur);   // knocked off the route: plan again from here
+    }
+
+    if (onPath && r.pathIdx + 1 < r.path.size()) {
+        // Route cells ahead of the robot (current cell first).
         Cell route[5];
-        int nRoute = 1;
-        route[0] = cur;
-        Cell c = cur;
-        for (int step = 0; step < 4; step++) {
-            int32_t d = r.dist[(size_t)c.y * W + c.x];
-            if (d == 0) break;
-            bool found = false;
-            for (int k = 0; k < 4 && !found; k++) {
-                int nx = c.x + dx[k], ny = c.y + dy[k];
-                if (!grid_.movable(nx, ny)) continue;
-                if (r.dist[(size_t)ny * W + nx] == d - 1) { c = { nx, ny }; found = true; }
-            }
-            if (!found) break;
-            route[nRoute++] = c;
-        }
-        // Aim at the furthest route cell reachable in a straight line that
-        // stays on the route's own cells: cutting a corner through another
-        // lane would break the arrow rules and lengthen the trip.
-        // The line must visit route cells in order, never skipping one.
+        int nRoute = 0;
+        for (size_t i = r.pathIdx; i < r.path.size() && nRoute < 5; i++) route[nRoute++] = r.path[i];
+        // Aim at the furthest of them reachable in a straight line that visits
+        // route cells in order, never skipping one: cutting a corner through
+        // another lane would break the arrow rules and lengthen the trip.
         auto routeIndex = [&](float px, float py, int upTo) {
             Cell q = grid_.cellAt(px, py);
             for (int i = 0; i <= upTo; i++)
@@ -170,6 +189,7 @@ void WorldPlanner::prefVelocity(const Robot &r, const RobotObs &o, float &px, fl
             if (!ok) break;
             bestX = cx; bestY = cy; have = true;
         }
+        if (!have && nRoute > 1) grid_.centre(route[1], bestX, bestY), have = true;
         if (have) { tx = bestX; ty = bestY; }
     }
 
