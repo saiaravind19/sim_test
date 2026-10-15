@@ -5,7 +5,6 @@
 //   sim mode   (REQ)  ControlModeRequest -> robots are put in velocity mode
 //
 // One planner per world (OpenMP across worlds). Pick worlds with --worlds.
-#include <omp.h>
 #include <zmq.h>
 
 #include <pb_decode.h>

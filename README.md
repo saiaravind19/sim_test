@@ -28,7 +28,9 @@ Ubuntu / Debian:
 sudo apt install git cmake g++ libzmq3-dev nlohmann-json3-dev
 ```
 
-macOS: `brew install cmake zeromq nlohmann-json libomp`
+macOS: `brew install cmake zeromq nlohmann-json libomp`, then configure with
+`cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix)` (libomp is optional:
+without it the planner uses one thread).
 
 RVO2 is downloaded by CMake the first time (needs internet access to GitHub).
 

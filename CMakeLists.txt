@@ -7,7 +7,19 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-find_package(OpenMP REQUIRED COMPONENTS CXX)
+# OpenMP is optional (worlds are planned in parallel when it is found).
+# Apple clang has none: install it with `brew install libomp`.
+if(APPLE AND NOT OpenMP_ROOT)
+  execute_process(COMMAND brew --prefix libomp OUTPUT_VARIABLE _libomp
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(_libomp)
+    set(OpenMP_ROOT ${_libomp})
+  endif()
+endif()
+find_package(OpenMP COMPONENTS CXX)
+if(NOT OpenMP_CXX_FOUND)
+  message(WARNING "OpenMP not found: planning runs on one thread")
+endif()
 find_package(nlohmann_json REQUIRED)
 
 # zeromq: pkg-config first, then plain find (Homebrew hints for macOS).
@@ -46,4 +58,7 @@ target_include_directories(sim2d_msgs PUBLIC gen third_party/nanopb)
 add_executable(rvo_planner_zmq app/zmq_planner.cpp)
 target_include_directories(rvo_planner_zmq PRIVATE ${ZMQ_INCLUDE_DIR})
 target_link_libraries(rvo_planner_zmq PRIVATE fleet_core sim2d_msgs ${ZMQ_LIBRARY}
-  OpenMP::OpenMP_CXX nlohmann_json::nlohmann_json)
+  nlohmann_json::nlohmann_json)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(rvo_planner_zmq PRIVATE OpenMP::OpenMP_CXX)
+endif()
