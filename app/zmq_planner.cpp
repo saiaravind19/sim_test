@@ -290,13 +290,21 @@ int main(int argc, char **argv)
             (void)simSpan;
             if (std::getenv("FLEET_DEBUG")) {
                 for (auto &kv : feeds)
-                    for (const auto &r : kv.second.robots)
+                    for (const auto &r : kv.second.robots) {
+                        if (kv.second.robots.size() <= 3) {
+                            float gx = 0, gy = 0;
+                            planners[kv.first]->goalOf(r.robot_id, gx, gy);
+                            printf("  robot %u at (%.2f,%.2f) th=%.2f v=%.2f goal=(%.1f,%.1f) steps left %d\n",
+                                   r.robot_id, r.pose.x, r.pose.y, r.pose.theta, r.v, gx, gy,
+                                   planners[kv.first]->stepsLeft(r.robot_id, r.pose.x, r.pose.y));
+                        }
                         if (r.stopped) {
                             float gx = 0, gy = 0;
                             planners[kv.first]->goalOf(r.robot_id, gx, gy);
                             printf("  halted robot %u at (%.2f,%.2f) th=%.2f v=%.2f hit_robot=%d goal=(%.1f,%.1f)\n",
                                    r.robot_id, r.pose.x, r.pose.y, r.pose.theta, r.v, r.hit_robot, gx, gy);
                         }
+                    }
             }
             lastGoals = goals;
             fflush(stdout);

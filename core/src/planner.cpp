@@ -66,6 +66,14 @@ bool WorldPlanner::goalOf(uint32_t robot, float &x, float &y) const
     return true;
 }
 
+int WorldPlanner::stepsLeft(uint32_t robot, float x, float y) const
+{
+    if (robot >= robots_.size() || !robots_[robot].known || robots_[robot].dist.empty()) return -1;
+    Cell c = grid_.cellAt(x, y);
+    if (c.x < 0 || c.y < 0 || c.x >= grid_.width() || c.y >= grid_.height()) return -1;
+    return robots_[robot].dist[(size_t)c.y * grid_.width() + c.x];
+}
+
 bool WorldPlanner::pickGoal(Robot &r, const RobotObs &o)
 {
     Cell here = grid_.cellAt(o.x, o.y);

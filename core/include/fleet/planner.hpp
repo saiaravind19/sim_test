@@ -71,6 +71,8 @@ public:
 
     // Goal of a robot in metres (false if the robot is unknown).
     bool goalOf(uint32_t robot, float &x, float &y) const;
+    // Steps left on the route to the goal (-1 if off the route / unknown).
+    int stepsLeft(uint32_t robot, float x, float y) const;
 
 private:
     struct Robot {
