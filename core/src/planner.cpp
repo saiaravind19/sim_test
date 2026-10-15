@@ -66,6 +66,22 @@ bool WorldPlanner::goalOf(uint32_t robot, float &x, float &y) const
     return true;
 }
 
+bool WorldPlanner::lastVelocity(uint32_t robot, float &vx, float &vy) const
+{
+    if (robot >= robots_.size() || !robots_[robot].known) return false;
+    vx = robots_[robot].orcaVx;
+    vy = robots_[robot].orcaVy;
+    return true;
+}
+
+bool WorldPlanner::lastPreferred(uint32_t robot, float &vx, float &vy) const
+{
+    if (robot >= robots_.size() || !robots_[robot].known) return false;
+    vx = robots_[robot].prefVx;
+    vy = robots_[robot].prefVy;
+    return true;
+}
+
 int WorldPlanner::stepsLeft(uint32_t robot, float x, float y) const
 {
     if (robot >= robots_.size() || !robots_[robot].known || robots_[robot].dist.empty()) return -1;
@@ -110,28 +126,49 @@ void WorldPlanner::prefVelocity(const Robot &r, const RobotObs &o, float &px, fl
         // of them that is in a straight, clear line from the robot.
         static const int dx[4] = { 0, 0, 1, -1 };
         static const int dy[4] = { 1, -1, 0, 0 };
+        // Cells of the planned route, current cell first.
+        Cell route[5];
+        int nRoute = 1;
+        route[0] = cur;
         Cell c = cur;
-        float bestX = 0, bestY = 0;
-        bool have = false;
         for (int step = 0; step < 4; step++) {
             int32_t d = r.dist[(size_t)c.y * W + c.x];
             if (d == 0) break;
-            Cell next = c;
             bool found = false;
             for (int k = 0; k < 4 && !found; k++) {
                 int nx = c.x + dx[k], ny = c.y + dy[k];
                 if (!grid_.movable(nx, ny)) continue;
-                if (r.dist[(size_t)ny * W + nx] == d - 1) { next = { nx, ny }; found = true; }
+                if (r.dist[(size_t)ny * W + nx] == d - 1) { c = { nx, ny }; found = true; }
             }
             if (!found) break;
+            route[nRoute++] = c;
+        }
+        // Aim at the furthest route cell reachable in a straight line that
+        // stays on the route's own cells: cutting a corner through another
+        // lane would break the arrow rules and lengthen the trip.
+        // The line must visit route cells in order, never skipping one.
+        auto routeIndex = [&](float px, float py, int upTo) {
+            Cell q = grid_.cellAt(px, py);
+            for (int i = 0; i <= upTo; i++)
+                if (route[i].x == q.x && route[i].y == q.y) return i;
+            return -1;
+        };
+        float bestX = 0, bestY = 0;
+        bool have = false;
+        for (int k = 1; k < nRoute; k++) {
             float cx, cy;
-            grid_.centre(next, cx, cy);
-            if (!have || grid_.lineClear(o.x, o.y, cx, cy, p_.radius)) {
-                bestX = cx; bestY = cy; have = true;
-            } else {
-                break;
+            grid_.centre(route[k], cx, cy);
+            float len = std::hypot(cx - o.x, cy - o.y);
+            int n = std::max(1, (int)std::ceil(len / 0.1f));
+            bool ok = true;
+            int idx = 0;
+            for (int i = 0; i <= n && ok; i++) {
+                float t = (float)i / n;
+                int ri = routeIndex(o.x + (cx - o.x) * t, o.y + (cy - o.y) * t, k);
+                if (ri < 0 || ri < idx || ri > idx + 1) ok = false; else idx = ri;
             }
-            c = next;
+            if (!ok) break;
+            bestX = cx; bestY = cy; have = true;
         }
         if (have) { tx = bestX; ty = bestY; }
     }
@@ -174,11 +211,19 @@ bool WorldPlanner::update(double t, const std::vector<RobotObs> &obs, std::vecto
             stats_.goalsReached++;
             if (!pickGoal(r, o)) r.goal = grid_.cellAt(o.x, o.y);
         }
-        sim_->setAgentPosition(r.agent, RVO::Vector2(o.x, o.y));
-        sim_->setAgentVelocity(r.agent, RVO::Vector2(o.v * std::cos(o.theta), o.v * std::sin(o.theta)));
+        // ORCA agent = a point `offset` ahead of the centre (differential drive).
+        float w = r.havePrev ? wrapPi(o.theta - r.prevTheta) / p_.period : 0.f;
+        r.prevTheta = o.theta;
+        r.havePrev = true;
+        float ct = std::cos(o.theta), st = std::sin(o.theta);
+        sim_->setAgentPosition(r.agent, RVO::Vector2(o.x + p_.offset * ct, o.y + p_.offset * st));
+        sim_->setAgentVelocity(r.agent, RVO::Vector2(o.v * ct - p_.offset * w * st,
+                                                     o.v * st + p_.offset * w * ct));
         float px, py;
         prefVelocity(r, o, px, py);
         sim_->setAgentPrefVelocity(r.agent, RVO::Vector2(px, py));
+        r.prefVx = px;
+        r.prefVy = py;
 
         if (std::fabs(o.v) < 0.05f) {
             if (r.slowSince < 0) r.slowSince = t;
@@ -194,17 +239,17 @@ bool WorldPlanner::update(double t, const std::vector<RobotObs> &obs, std::vecto
     sim_->doStep();
 
     for (const RobotObs &o : obs) {
-        const Robot &r = robots_[o.id];
+        Robot &r = robots_[o.id];
         RVO::Vector2 v = sim_->getAgentVelocity(r.agent);
-        float s = RVO::abs(v);
+        r.orcaVx = v.x();
+        r.orcaVy = v.y();
+        // Map the point's velocity back to the robot's (speed, turn rate).
+        float ct = std::cos(o.theta), st = std::sin(o.theta);
         VelCmd c;
         c.robot = o.id;
-        if (s > 0.02f) {
-            float err = wrapPi(std::atan2(v.y(), v.x()) - o.theta);
-            c.angular = std::max(-p_.omegamax, std::min(p_.omegamax, p_.turnGain * err));
-            float align = std::max(0.f, std::cos(err));
-            c.linear = std::min(p_.vmax, s * align * align * align);
-        }
+        c.linear = std::max(0.f, std::min(p_.vmax, v.x() * ct + v.y() * st));
+        c.angular = std::max(-p_.omegamax,
+                             std::min(p_.omegamax, (-v.x() * st + v.y() * ct) / p_.offset));
         cmds.push_back(c);
     }
 

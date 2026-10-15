@@ -30,7 +30,9 @@ struct Params {
     float timeHorizonObst = 1.5f;
     float goalTol = 0.35f;        // metres: the goal counts as reached
     float minGoalDist = 3.0f;     // new goals are at least this far away
-    float turnGain = 2.0f;        // rad/s of turn rate per rad of heading error
+    // Differential drive: ORCA plans for a point this far ahead of the robot's
+    // centre, so any velocity it returns maps to (speed, turn rate).
+    float offset = 0.2f;
     uint32_t seed = 1;
 };
 
@@ -71,6 +73,9 @@ public:
 
     // Goal of a robot in metres (false if the robot is unknown).
     bool goalOf(uint32_t robot, float &x, float &y) const;
+    // The raw ORCA velocity (m/s, world frame) from the last control step.
+    bool lastVelocity(uint32_t robot, float &vx, float &vy) const;
+    bool lastPreferred(uint32_t robot, float &vx, float &vy) const;
     // Steps left on the route to the goal (-1 if off the route / unknown).
     int stepsLeft(uint32_t robot, float x, float y) const;
 
@@ -80,6 +85,10 @@ private:
         Cell goal;
         std::vector<int32_t> dist;   // steps to the goal from every cell
         double slowSince = -1;       // sim time it started moving slowly
+        float orcaVx = 0, orcaVy = 0;  // last ORCA output
+        float prefVx = 0, prefVy = 0;  // last preferred velocity
+        float prevTheta = 0;           // heading at the last step (turn-rate estimate)
+        bool havePrev = false;
         bool known = false;
     };
 

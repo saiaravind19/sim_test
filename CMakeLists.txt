@@ -62,3 +62,7 @@ target_link_libraries(rvo_planner_zmq PRIVATE fleet_core sim2d_msgs ${ZMQ_LIBRAR
 if(OpenMP_CXX_FOUND)
   target_link_libraries(rvo_planner_zmq PRIVATE OpenMP::OpenMP_CXX)
 endif()
+
+# Planner self-test: no simulator, simple robot models.
+add_executable(fleet_selftest app/selftest.cpp)
+target_link_libraries(fleet_selftest PRIVATE fleet_core)
