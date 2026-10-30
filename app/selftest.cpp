@@ -3,15 +3,21 @@
 //   holonomic  robots move exactly as ORCA says (ideal case)
 //   diffdrive  robots get the planner's (linear, angular) command and move like
 //              the simulator's robots (acceleration and turn-rate limits)
+// If the layout has F (feeding) and D (dumping) cells, robots run the
+// behaviour-tree sorting cycle instead of random goals (set NO_TASKS=1 to skip).
+// Env: TREE=file.xml custom tree, DUMP=1 print every robot's state at each
+// report, WALLLOG=1 print where robots touch walls.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "fleet/planner.hpp"
 #include "fleet/scene.hpp"
+#include "fleet/task_manager.hpp"
 
 using namespace fleet;
 
@@ -34,6 +40,19 @@ int main(int argc, char **argv)
 
     WorldPlanner pl(scene.worlds[world].map, prm, (uint32_t)world);
     const Grid &g = pl.grid();
+    std::unique_ptr<TaskManager> tasks;
+    ZoneLayout zl = ZoneLayout::build(g);
+    if (zl.usable() && !std::getenv("NO_TASKS")) {
+        TaskParams tp;
+        if (std::getenv("TREE")) tp.treeFile = std::getenv("TREE");
+        tasks = std::make_unique<TaskManager>(pl, zl, tp, (uint32_t)world);
+        printf("sorting cycle: %s\n", zl.summary().c_str());
+        for (size_t i = 0; i < zl.feeders.size(); i++) {
+            printf("  feeder %zu at (%d,%d), lane:", i, zl.feeders[i].cell.x, zl.feeders[i].cell.y);
+            for (Cell c : zl.feeders[i].lane) printf(" (%d,%d)", c.x, c.y);
+            printf("\n");
+        }
+    }
 
     // Start robots on distinct movable cells, facing the lane direction.
     std::mt19937 rng(5);
@@ -42,6 +61,7 @@ int main(int argc, char **argv)
     while ((int)rb.size() < n) {
         Cell c = g.randomCell(rng);
         if (used[c.y * g.width() + c.x]) continue;
+        if (g.zone(c.x, c.y) != bs2d::ZonePlain) continue;   // start outside the zones
         used[c.y * g.width() + c.x] = 1;
         RobotObs o;
         o.id = (uint32_t)rb.size();
@@ -60,6 +80,7 @@ int main(int argc, char **argv)
         std::vector<VelCmd> out;
         if (pl.update(t, rb, out)) {
             for (const VelCmd &c : out) cmds[c.robot] = c;
+            if (tasks) tasks->tick(t);
         }
         for (int i = 0; i < n; i++) {
             RobotObs &o = rb[i];
@@ -97,6 +118,13 @@ int main(int argc, char **argv)
                     if (std::hypot(rb[i].x - nx, rb[i].y - ny) < simR) wall = true;
                 }
             if (wall) wallSteps++;
+            if (wall && tasks && std::getenv("WALLLOG")) {
+                static std::vector<int> cnt(64 * 64 * 8, 0);
+                int key = (c.y * 64 + c.x) * 8 + (int)tasks->state(i);
+                if (cnt[key]++ == 0)
+                    printf("  wall contact: robot %d %s cell (%d,%d) pos (%.2f,%.2f) th %.2f\n", i,
+                           stateName(tasks->state(i)), c.x, c.y, rb[i].x, rb[i].y, rb[i].theta);
+            }
             for (int j = i + 1; j < n; j++)
                 if (std::hypot(rb[i].x - rb[j].x, rb[i].y - rb[j].y) < 2 * simR) overlapSteps++;
         }
@@ -125,6 +153,21 @@ int main(int argc, char **argv)
             printf("t=%5.0fs goals=%llu (%.2f/s) mean speed %.2f stalled %d | contact steps: robot %llu wall %llu\n",
                    t, (unsigned long long)pl.stats().goalsReached, pl.stats().goalsReached / t,
                    sp / n, stalled, (unsigned long long)overlapSteps, (unsigned long long)wallSteps);
+            if (tasks && std::getenv("DUMP")) {
+                for (int i = 0; i < n; i++) {
+                    float gx = 0, gy = 0;
+                    pl.goalOf(i, gx, gy);
+                    printf("    robot %2d %-9s at (%.2f,%.2f) th=%5.2f v=%.2f goal (%.1f,%.1f)%s\n", i,
+                           stateName(tasks->state(i)), rb[i].x, rb[i].y, rb[i].theta, rb[i].v, gx, gy,
+                           pl.atGoal(i) ? " arrived" : "");
+                }
+            }
+            if (tasks) {
+                const TaskStats &ts = tasks->stats();
+                printf("         parcels fed %llu dumped %llu | configure %u queuing %u feeding %u approval %u feeding_done %u dumping %u waiting %u\n",
+                       (unsigned long long)ts.fed, (unsigned long long)ts.dumped, ts.inState[0],
+                       ts.inState[1], ts.inState[2], ts.inState[3], ts.inState[4], ts.inState[5], ts.inState[6]);
+            }
         }
     }
     return 0;

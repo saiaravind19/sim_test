@@ -27,6 +27,7 @@
 
 #include "fleet/planner.hpp"
 #include "fleet/scene.hpp"
+#include "fleet/task_manager.hpp"
 #include "sim2d_msgs.pb.h"
 
 using namespace fleet;
@@ -42,6 +43,8 @@ struct Options {
     double duration = 0;       // wall seconds, 0 = until Ctrl-C
     double report = 5.0;       // wall seconds between reports
     Params params;
+    TaskParams tasks;
+    bool randomGoals = false;  // ignore zones: random goals like before
 };
 
 bool decodeRobot(pb_istream_t *s, const pb_field_t *, void **arg)
@@ -64,7 +67,10 @@ void usage(const char *a)
     fprintf(stderr,
         "usage: %s scene.json [--host H] [--worlds 0,1] [--period S] [--vmax M]\n"
         "          [--radius R] [--seed N] [--duration S] [--report S]\n"
-        "          [--state-port P] [--cmd-port P] [--service-port P]\n", a);
+        "          [--state-port P] [--cmd-port P] [--service-port P]\n"
+        "          [--tree file.xml] [--feed-time S] [--dump-time S] [--random-goals]\n"
+        "Worlds whose layout has F (feeding) and D (dumping) cells run the\n"
+        "behaviour-tree sorting cycle; others get random goals.\n", a);
 }
 
 bool parse(int argc, char **argv, Options &o)
@@ -96,6 +102,10 @@ bool parse(int argc, char **argv, Options &o)
         else if (a == "--report") { if (!(v = next("--report"))) return false; o.report = std::atof(v); }
         else if (a == "--state-port") { if (!(v = next("--state-port"))) return false; o.statePort = std::atoi(v); }
         else if (a == "--cmd-port") { if (!(v = next("--cmd-port"))) return false; o.cmdPort = std::atoi(v); }
+        else if (a == "--tree") { if (!(v = next("--tree"))) return false; o.tasks.treeFile = v; }
+        else if (a == "--feed-time") { if (!(v = next("--feed-time"))) return false; o.tasks.feedTime = std::atof(v); }
+        else if (a == "--dump-time") { if (!(v = next("--dump-time"))) return false; o.tasks.dumpTime = std::atof(v); }
+        else if (a == "--random-goals") o.randomGoals = true;
         else if (a == "--service-port") { if (!(v = next("--service-port"))) return false; o.svcPort = std::atoi(v); }
         else if (!a.empty() && a[0] != '-') o.scene = a;
         else return false;
@@ -167,11 +177,26 @@ int main(int argc, char **argv)
     }
 
     std::map<int, std::unique_ptr<WorldPlanner>> planners;
+    std::map<int, std::unique_ptr<TaskManager>> tasks;
+    opt.tasks.seed = opt.params.seed;
     for (int w : opt.worlds) {
         planners[w] = std::make_unique<WorldPlanner>(scene.worlds[w].map, opt.params, (uint32_t)w);
         printf("world %d (%s): %d movable cells, %s\n", w, scene.worlds[w].name.c_str(),
                planners[w]->grid().movableCount(),
                planners[w]->grid().hasRules() ? "arrow rules on" : "no arrow rules");
+        ZoneLayout zl = ZoneLayout::build(planners[w]->grid());
+        if (!opt.randomGoals && zl.usable()) {
+            try {
+                tasks[w] = std::make_unique<TaskManager>(*planners[w], zl, opt.tasks, (uint32_t)w);
+            } catch (const std::exception &e) {
+                fprintf(stderr, "behaviour tree error: %s\n", e.what());
+                return 1;
+            }
+            printf("  sorting cycle (behaviour tree): %s\n", zl.summary().c_str());
+        } else if (planners[w]->grid().hasZones()) {
+            printf("  zones found but %s: random goals\n",
+                   opt.randomGoals ? "--random-goals given" : "need F and D cells");
+        }
     }
 
     void *ctx = zmq_ctx_new();
@@ -247,6 +272,8 @@ int main(int argc, char **argv)
                 obs.push_back(o);
             }
             ran[i] = planners[ready[i]]->update(f.t, obs, out[i]);
+            auto tm = tasks.find(ready[i]);
+            if (ran[i] && tm != tasks.end()) tm->second->tick(f.t);
         }
         for (size_t i = 0; i < ready.size(); i++) {
             WorldFeed &f = feeds[ready[i]];
@@ -305,6 +332,18 @@ int main(int argc, char **argv)
                         }
                     }
             }
+            if (!tasks.empty()) {
+                uint64_t fed = 0, dumped = 0;
+                uint32_t st[kRobotStates] = {};
+                for (auto &kv : tasks) {
+                    const TaskStats &ts = kv.second->stats();
+                    fed += ts.fed; dumped += ts.dumped;
+                    for (int k = 0; k < kRobotStates; k++) st[k] += ts.inState[k];
+                }
+                printf("  sorting: parcels fed %llu dumped %llu | configure %u queuing %u feeding %u approval %u feeding_done %u dumping %u waiting %u\n",
+                       (unsigned long long)fed, (unsigned long long)dumped,
+                       st[0], st[1], st[2], st[3], st[4], st[5], st[6]);
+            }
             lastGoals = goals;
             fflush(stdout);
         }
@@ -313,6 +352,7 @@ int main(int argc, char **argv)
 
     uint64_t goals = 0;
     for (int w : opt.worlds) goals += planners[w]->stats().goalsReached;
+    tasks.clear();
     printf("done: %llu goals reached in %.1f s of simulated time\n",
            (unsigned long long)goals, lastSimT - std::max(0.0, firstSimT));
     zmq_close(sub);

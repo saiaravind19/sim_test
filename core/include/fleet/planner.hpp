@@ -68,6 +68,33 @@ public:
     // the last one. Returns true and fills `cmds` when it ran.
     bool update(double t, const std::vector<RobotObs> &obs, std::vector<VelCmd> &cmds);
 
+    // --- Goals set from outside (task manager) -------------------------------
+    // When on, robots get no random goals: they hold still until setGoal()
+    // gives them one, and hold again once they reach it.
+    void setExternalGoals(bool on) { external_ = on; }
+    bool externalGoals() const { return external_; }
+    // True if update() at sim time `t` would run a control step.
+    bool due(double t) const { return t >= lastT_ + p_.period - 1e-9; }
+    size_t robotSlots() const { return robots_.size(); }   // highest robot id + 1
+    bool known(uint32_t robot) const { return robot < robots_.size() && robots_[robot].known; }
+    // Send a robot to `goal`. `open` marks the zone cells (F, Q, D) its route
+    // may use (see Grid::distanceTo); the robot's own cell is always allowed.
+    // Returns false (old goal kept) if the goal cannot be reached from here.
+    bool setGoal(uint32_t robot, Cell goal, const std::vector<uint8_t> *open = nullptr);
+    // True once the robot has come within goalTol of the goal set last.
+    bool atGoal(uint32_t robot) const
+    {
+        return known(robot) && robots_[robot].hasGoal && robots_[robot].arrived;
+    }
+    // Last observed position of a robot.
+    bool position(uint32_t robot, float &x, float &y) const
+    {
+        if (!known(robot)) return false;
+        x = robots_[robot].lastX;
+        y = robots_[robot].lastY;
+        return true;
+    }
+
     const Stats &stats() const { return stats_; }
     const Grid &grid() const { return grid_; }
 
@@ -92,6 +119,10 @@ private:
         float prevTheta = 0;           // heading at the last step (turn-rate estimate)
         bool havePrev = false;
         bool known = false;
+        float lastX = 0, lastY = 0;    // last observed position
+        bool hasGoal = false;          // external goals: a goal has been set
+        bool arrived = false;          // external goals: reached it
+        bool parked = false;           // holding at its goal this step (sent 0, 0)
     };
 
     bool pickGoal(Robot &r, const RobotObs &o);
@@ -108,6 +139,7 @@ private:
     std::vector<Robot> robots_;   // indexed by robot id
     std::mt19937 rng_;
     double lastT_ = -1e9;
+    bool external_ = false;
     Stats stats_;
 };
 

@@ -11,12 +11,16 @@ Grid::Grid(const bs2d::Map &map) : map_(map)
     for (uint8_t d : map_.dirs) {
         if (d) { hasRules_ = true; break; }
     }
+    for (uint8_t z : map_.zones) {
+        if (z) { hasZones_ = true; break; }
+    }
     movable_.assign((size_t)map_.width * map_.height, 0);
     for (int32_t y = 0; y < map_.height; y++) {
         for (int32_t x = 0; x < map_.width; x++) {
             size_t i = (size_t)y * map_.width + x;
             bool free = !map_.occupied[i];
-            bool ok = free && (!hasRules_ || map_.dirs[i] != 0);
+            bool tagged = !map_.zones.empty() && map_.zones[i] != bs2d::ZonePlain;
+            bool ok = free && (!hasRules_ || map_.dirs[i] != 0 || tagged);
             movable_[i] = ok;
             if (ok) movableCells_.push_back({x, y});
         }
@@ -37,10 +41,12 @@ void Grid::centre(Cell c, float &x, float &y) const
 uint8_t Grid::moves(int32_t x, int32_t y) const
 {
     if (!hasRules_) return 15;
-    return map_.dirs[(size_t)y * map_.width + x];
+    uint8_t d = map_.dirs[(size_t)y * map_.width + x];
+    return d ? d : 15;   // a zone cell without arrows may be left any way
 }
 
-void Grid::distanceTo(Cell goal, std::vector<int32_t> &dist) const
+void Grid::distanceTo(Cell goal, std::vector<int32_t> &dist,
+                      const std::vector<uint8_t> *open) const
 {
     dist.assign((size_t)map_.width * map_.height, -1);
     if (!movable(goal.x, goal.y)) return;
@@ -61,6 +67,7 @@ void Grid::distanceTo(Cell goal, std::vector<int32_t> &dist) const
             if (!movable(px, py)) continue;
             if (!(moves(px, py) & (1 << k))) continue;
             size_t pi = (size_t)py * map_.width + px;
+            if (open && zone(px, py) != bs2d::ZonePlain && !(*open)[pi]) continue;
             if (dist[pi] >= 0) continue;
             dist[pi] = d + 1;
             q.push_back({px, py});
@@ -84,6 +91,15 @@ bool Grid::lineClear(float x0, float y0, float x1, float y1, float margin) const
         }
     }
     return true;
+}
+
+bool Grid::allows(Cell a, Cell b) const
+{
+    if (!movable(a.x, a.y) || !movable(b.x, b.y)) return false;
+    int dx = b.x - a.x, dy = b.y - a.y;
+    int k = dy == 1 && dx == 0 ? 0 : dy == -1 && dx == 0 ? 1 : dx == 1 && dy == 0 ? 2
+          : dx == -1 && dy == 0 ? 3 : -1;
+    return k >= 0 && (moves(a.x, a.y) & (1 << k));
 }
 
 Cell Grid::randomCell(std::mt19937 &rng) const

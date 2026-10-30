@@ -44,6 +44,24 @@ add_library(rvo2 STATIC
 target_include_directories(rvo2 PUBLIC ${rvo2_SOURCE_DIR}/src)
 set_target_properties(rvo2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# BehaviorTree.CPP v4 for the sorting task manager, built from source with
+# only the core library (no Groot2 publisher, no SQLite logger, no tools).
+set(BTCPP_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BTCPP_GROOT_INTERFACE OFF CACHE BOOL "" FORCE)
+set(BTCPP_SQLITE_LOGGING OFF CACHE BOOL "" FORCE)
+set(BTCPP_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BTCPP_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(BTCPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# Nothing here is installed; BT.CPP's install(EXPORT) rules do not work with
+# its static build, so install rules are switched off.
+set(CMAKE_SKIP_INSTALL_RULES ON)
+FetchContent_Declare(behaviortree_cpp
+  GIT_REPOSITORY https://github.com/BehaviorTree/BehaviorTree.CPP.git
+  GIT_TAG 4.6.2
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(behaviortree_cpp)
+
 # Planner core: no transport, no ROS. Used by every front end below.
 add_subdirectory(core)
 
@@ -57,7 +75,7 @@ target_include_directories(sim2d_msgs PUBLIC gen third_party/nanopb)
 
 add_executable(rvo_planner_zmq app/zmq_planner.cpp)
 target_include_directories(rvo_planner_zmq PRIVATE ${ZMQ_INCLUDE_DIR})
-target_link_libraries(rvo_planner_zmq PRIVATE fleet_core sim2d_msgs ${ZMQ_LIBRARY}
+target_link_libraries(rvo_planner_zmq PRIVATE fleet_core fleet_tasks sim2d_msgs ${ZMQ_LIBRARY}
   nlohmann_json::nlohmann_json)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(rvo_planner_zmq PRIVATE OpenMP::OpenMP_CXX)
@@ -65,4 +83,4 @@ endif()
 
 # Planner self-test: no simulator, simple robot models.
 add_executable(fleet_selftest app/selftest.cpp)
-target_link_libraries(fleet_selftest PRIVATE fleet_core)
+target_link_libraries(fleet_selftest PRIVATE fleet_core fleet_tasks)

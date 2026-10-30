@@ -34,13 +34,41 @@ std::vector<std::string> splitCSV(const std::string &line)
 
 enum class Cell { Empty, Free, Wall, Invalid };
 
+// Split an optional zone tag off a field: "F(-,v,-,-)" -> 'F', "(-,v,-,-)".
+// A bare tag ("F") is a drivable cell without arrows. Returns 0 if untagged.
+char splitTag(const std::string &f, std::string &rest)
+{
+    if (!f.empty() && (f[0] == 'F' || f[0] == 'Q' || f[0] == 'D' || f[0] == 'T') &&
+        (f.size() == 1 || f[1] == '(')) {
+        rest = f.substr(1);
+        return f[0];
+    }
+    rest = f;
+    return 0;
+}
+
+uint8_t zoneOf(char tag)
+{
+    switch (tag) {
+    case 'F': return ZoneFeeding;
+    case 'Q': return ZoneQueuing;
+    case 'D': return ZoneDumping;
+    default: return ZonePlain;   // 'T' or untagged
+    }
+}
+
 // Layout rules (see docs/layout_rules.md):
 //   "(a,b,c,d)"  drivable cell (arrows are kept as direction rules in Map::dirs)
 //   "0"          drivable cell (legacy occupancy format)
 //   "1"          wall cell (legacy occupancy format)
 //   ""           empty: outside the layout, treated as wall
-Cell classify(const std::string &f)
+//   A leading F, Q, D or T tags a drivable cell with a zone ("F(-,v,-,-)",
+//   or just "F" for a cell without arrows).
+Cell classify(const std::string &field)
 {
+    std::string f;
+    char tag = splitTag(field, f);
+    if (tag) return f.empty() || (f.front() == '(' && f.back() == ')') ? Cell::Free : Cell::Invalid;
     if (f.empty()) return Cell::Empty;
     if (f.front() == '(' && f.back() == ')') return Cell::Free;
     if (f == "0") return Cell::Free;
@@ -93,6 +121,7 @@ bool loadMapCSV(const std::string &path, Map &out, std::string &err)
     out.originY = 0.f;
     out.occupied.assign(width * height, 1); // wall unless drivable
     out.dirs.assign(width * height, 0);
+    out.zones.assign(width * height, ZonePlain);
 
     for (int32_t r = 0; r < height; r++) {
         for (int32_t c = 0; c < width; c++) {
@@ -111,6 +140,8 @@ bool loadMapCSV(const std::string &path, Map &out, std::string &err)
             bool drivable = k == Cell::Free;
             out.occupied[(height - 1 - r) * width + c] = drivable ? 0 : 1;
             if (drivable) {
+                std::string body;
+                out.zones[(height - 1 - r) * width + c] = zoneOf(splitTag(field, body));
                 uint8_t d = 0;
                 for (char ch : field) {
                     if (ch == '^') d |= 1;

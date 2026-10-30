@@ -90,6 +90,31 @@ int WorldPlanner::stepsLeft(uint32_t robot, float x, float y) const
     return robots_[robot].dist[(size_t)c.y * grid_.width() + c.x];
 }
 
+bool WorldPlanner::setGoal(uint32_t robot, Cell goal, const std::vector<uint8_t> *open)
+{
+    if (!known(robot)) return false;
+    Robot &r = robots_[robot];
+    Cell here = grid_.cellAt(r.lastX, r.lastY);
+    std::vector<int32_t> dist;
+    if (open) {
+        std::vector<uint8_t> o = *open;
+        if (grid_.movable(here.x, here.y)) o[(size_t)here.y * grid_.width() + here.x] = 1;
+        grid_.distanceTo(goal, dist, &o);
+    } else {
+        grid_.distanceTo(goal, dist);
+    }
+    if (!grid_.movable(here.x, here.y) || dist[(size_t)here.y * grid_.width() + here.x] < 0)
+        return false;
+    r.dist.swap(dist);
+    r.goal = goal;
+    r.hasGoal = true;
+    float gx, gy;
+    grid_.centre(goal, gx, gy);
+    r.arrived = std::hypot(gx - r.lastX, gy - r.lastY) < p_.goalTol;
+    planPath(r, here);
+    return true;
+}
+
 bool WorldPlanner::planPath(Robot &r, Cell from) const
 {
     r.path.clear();
@@ -213,10 +238,12 @@ bool WorldPlanner::update(double t, const std::vector<RobotObs> &obs, std::vecto
     for (const RobotObs &o : obs) {
         if (o.id >= robots_.size()) robots_.resize(o.id + 1);
         Robot &r = robots_[o.id];
+        r.lastX = o.x;
+        r.lastY = o.y;
         if (!r.known) {
             r.known = true;
             r.agent = sim_->addAgent(RVO::Vector2(o.x, o.y));
-            if (!pickGoal(r, o)) r.goal = grid_.cellAt(o.x, o.y);
+            if (external_ || !pickGoal(r, o)) r.goal = grid_.cellAt(o.x, o.y);
         }
     }
 
@@ -227,7 +254,16 @@ bool WorldPlanner::update(double t, const std::vector<RobotObs> &obs, std::vecto
         Robot &r = robots_[o.id];
         float gx, gy;
         grid_.centre(r.goal, gx, gy);
-        if (std::hypot(gx - o.x, gy - o.y) < p_.goalTol) {
+        bool hold = false;
+        if (external_) {
+            if (r.hasGoal && !r.arrived && std::hypot(gx - o.x, gy - o.y) < p_.goalTol) {
+                r.arrived = true;
+                stats_.goalsReached++;
+            }
+            // Wait at the goal for the next task. A robot pushed off it (other
+            // robots squeezing past) drives back instead of drifting away.
+            hold = !r.hasGoal || (r.arrived && std::hypot(gx - o.x, gy - o.y) < p_.goalTol);
+        } else if (std::hypot(gx - o.x, gy - o.y) < p_.goalTol) {
             stats_.goalsReached++;
             if (!pickGoal(r, o)) r.goal = grid_.cellAt(o.x, o.y);
         }
@@ -239,8 +275,9 @@ bool WorldPlanner::update(double t, const std::vector<RobotObs> &obs, std::vecto
         sim_->setAgentPosition(r.agent, RVO::Vector2(o.x + p_.offset * ct, o.y + p_.offset * st));
         sim_->setAgentVelocity(r.agent, RVO::Vector2(o.v * ct - p_.offset * w * st,
                                                      o.v * st + p_.offset * w * ct));
-        float px, py;
-        prefVelocity(r, o, px, py);
+        float px = 0, py = 0;
+        r.parked = hold;
+        if (!hold) prefVelocity(r, o, px, py);
         sim_->setAgentPrefVelocity(r.agent, RVO::Vector2(px, py));
         r.prefVx = px;
         r.prefVy = py;
@@ -267,6 +304,12 @@ bool WorldPlanner::update(double t, const std::vector<RobotObs> &obs, std::vecto
         float ct = std::cos(o.theta), st = std::sin(o.theta);
         VelCmd c;
         c.robot = o.id;
+        if (r.parked) {
+            // Waiting for its next task: stand still. Others steer around it
+            // (it stays an ORCA agent), instead of it being shoved away.
+            cmds.push_back(c);
+            continue;
+        }
         c.linear = std::max(0.f, std::min(p_.vmax, v.x() * ct + v.y() * st));
         c.angular = std::max(-p_.omegamax,
                              std::min(p_.omegamax, (-v.x() * st + v.y() * ct) / p_.offset));

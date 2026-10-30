@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- Sorting cycle, one tree per robot. robot_id is set on the blackboard. -->
+<root BTCPP_format="4" main_tree_to_execute="SortingCycle">
+  <BehaviorTree ID="SortingCycle">
+    <Sequence>
+      <Configure/>
+      <KeepRunningUntilFailure>
+        <Sequence>
+          <Queuing feeder="{feeder}"/>
+          <Feeding feeder="{feeder}"/>
+          <DumpApproval destination="{destination}" dump_x="{dump_x}" dump_y="{dump_y}"/>
+          <Dumping destination="{destination}"/>
+        </Sequence>
+      </KeepRunningUntilFailure>
+    </Sequence>
+  </BehaviorTree>
+</root>
